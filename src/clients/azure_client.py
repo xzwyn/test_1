@@ -1,12 +1,7 @@
-# document_aligner/src/clients/azure_client.py
-
 import os
 from typing import List, Dict, Any, Optional
 import numpy as np
 from openai import AzureOpenAI
-
-# NOTE: The main.py script already loads dotenv, but it's good practice
-# for a module that relies on env vars to be able to load them itself.
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -27,7 +22,6 @@ def _load_env():
     _cfg["chat_deployment"] = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 
 def _get_client() -> AzureOpenAI:
-    """Initializes and returns a singleton AzureOpenAI client."""
     global _client
     if _client is not None:
         return _client
@@ -47,11 +41,8 @@ def _get_client() -> AzureOpenAI:
     return _client
 
 def chat(messages: List[Dict[str, Any]], temperature: float = 0.1, model: Optional[str] = None) -> str:
-    """
-    Sends a chat completion request to the configured Azure deployment.
-    """
     client = _get_client()
-    # The 'model' parameter must be your deployment name.
+
     deployment = model or _cfg["chat_deployment"]
     
     resp = client.chat.completions.create(

@@ -1,5 +1,3 @@
-# document_aligner/src/reporting/excel_writer.py
-
 from pathlib import Path
 from typing import List, Dict, Any
 import pandas as pd
@@ -8,13 +6,6 @@ AlignedPair = Dict[str, Any]
 EvaluationFinding = Dict[str, Any]
 
 def save_alignment_report(aligned_data: List[AlignedPair], filepath: Path) -> None:
-    """
-    Saves the document alignment data to an Excel file.
-
-    Args:
-        aligned_data: A list of aligned pair dictionaries.
-        filepath: The path for the output Excel file.
-    """
     if not aligned_data:
         print("Warning: No aligned data to save to Excel.")
         return
@@ -41,13 +32,6 @@ def save_alignment_report(aligned_data: List[AlignedPair], filepath: Path) -> No
         print(f"Error: Could not write alignment report to '{filepath}'. Reason: {e}")
 
 def save_evaluation_report(evaluation_results: List[EvaluationFinding], filepath: Path) -> None:
-    """
-    Saves the AI evaluation findings to a separate Excel report.
-
-    Args:
-        evaluation_results: A list of finding dictionaries from the evaluation pipeline.
-        filepath: The path for the output evaluation report file.
-    """
     if not evaluation_results:
         print("No evaluation findings to save.")
         return
@@ -57,12 +41,10 @@ def save_evaluation_report(evaluation_results: List[EvaluationFinding], filepath
 
     df = pd.DataFrame(evaluation_results)
 
-    # Reorder columns for better readability in the final report
     desired_columns = [
         "page", "type", "suggestion", "english_text", "german_text", 
         "original_phrase", "translated_phrase"
     ]
-    # Filter to only include columns that actually exist in the data
     final_columns = [col for col in desired_columns if col in df.columns]
     df = df[final_columns]
     

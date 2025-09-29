@@ -1,14 +1,11 @@
 pandas
 openpyxl
 
-# For semantic similarity and embeddings
 sentence-transformers
 torch
 scikit-learn
 
-# For progress bars in the command line (optional but recommended)
 tqdm
 
-# --- NEW: For AI Evaluation ---
 openai>=1.40.0
 python-dotenv

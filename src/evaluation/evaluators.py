@@ -1,7 +1,5 @@
-# document_aligner/src/evaluation/evaluators.py
-
 import json
-from src.clients.azure_client import chat # Updated import path
+from src.clients.azure_client import chat  
 
 def evaluate_translation_pair(eng_text: str, ger_text: str, model_name=None):
     """Agent 1: Primary Translation Auditor."""

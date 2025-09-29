@@ -2,7 +2,6 @@ import json
 from typing import List, Dict, Any
 from tqdm import tqdm
 
-# Updated import paths to match the new structure
 from src.evaluation.evaluators import evaluate_translation_pair, check_context_mismatch
 from src.clients.azure_client import chat
 
@@ -45,18 +44,12 @@ Return the JSON object only – no extra text.
         return False, "System error (non-parsing issue)", "{}"
 
 def run_evaluation_pipeline(aligned_pairs: List[AlignedPair]) -> List[EvaluationFinding]:
-    """
-    Runs the full multi-agent evaluation pipeline on the aligned document pairs.
-    """
     findings = []
     
-    # Using tqdm for a progress bar
     for pair in tqdm(aligned_pairs, desc="Evaluating Pairs"):
-        # --- COMPATIBILITY CHANGE: Unpack pair from dict structure ---
         eng_elem = pair.get('english')
         ger_elem = pair.get('german')
 
-        # Case 1: An English item was omitted in the German document
         if eng_elem and not ger_elem:
             findings.append({
                 "type": f"Omission",
@@ -67,7 +60,6 @@ def run_evaluation_pipeline(aligned_pairs: List[AlignedPair]) -> List[Evaluation
             })
             continue
         
-        # Case 2: An extra German item was added that doesn't exist in English
         if not eng_elem and ger_elem:
             findings.append({
                 "type": f"Addition",
@@ -78,14 +70,10 @@ def run_evaluation_pipeline(aligned_pairs: List[AlignedPair]) -> List[Evaluation
             })
             continue
 
-        # Case 3: A matched pair to evaluate
         if eng_elem and ger_elem:
             eng_text = eng_elem['text']
             ger_text = ger_elem['text']
 
-            # NOTE: The original code had table evaluation logic.
-            # Our current json_parser does not extract tables. This can be added later.
-            
             # Agent 1
             finding = evaluate_translation_pair(eng_text, ger_text)
             error_type = finding.get("error_type", "None")

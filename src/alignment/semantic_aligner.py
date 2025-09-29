@@ -1,5 +1,3 @@
-# document_aligner/src/alignment/semantic_aligner.py
-
 from typing import List, Dict, Any
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
@@ -8,15 +6,12 @@ from tqdm import tqdm
 
 import config
 
-# Type aliases for clarity
 ContentItem = Dict[str, Any]
 AlignedPair = Dict[str, Any]
 
-# Global cache for the model to avoid reloading it
 _model = None
 
 def _get_model(model_name: str) -> SentenceTransformer:
-    """Loads and caches the SentenceTransformer model."""
     global _model
     if _model is None:
         print(f"Loading sentence transformer model '{model_name}'...")
@@ -24,7 +19,6 @@ def _get_model(model_name: str) -> SentenceTransformer:
     return _model
 
 def _calculate_type_matrix(eng_content: List[ContentItem], ger_content: List[ContentItem]) -> np.ndarray:
-    """Calculates a bonus/penalty matrix based on content type matching."""
     num_eng = len(eng_content)
     num_ger = len(ger_content)
     type_matrix = np.zeros((num_eng, num_ger))
@@ -38,13 +32,11 @@ def _calculate_type_matrix(eng_content: List[ContentItem], ger_content: List[Con
     return type_matrix
 
 def _calculate_proximity_matrix(num_eng: int, num_ger: int) -> np.ndarray:
-    """Calculates a score matrix based on the relative position of items."""
     proximity_matrix = np.zeros((num_eng, num_ger))
     for i in range(num_eng):
         for j in range(num_ger):
             norm_pos_eng = i / num_eng
             norm_pos_ger = j / num_ger
-            # Score is 1 for identical relative positions, 0 for opposite ends of the documents.
             proximity_matrix[i, j] = 1.0 - abs(norm_pos_eng - norm_pos_ger)
     return proximity_matrix
 
@@ -52,21 +44,7 @@ def align_content(
     english_content: List[ContentItem],
     german_content: List[ContentItem]
 ) -> List[AlignedPair]:
-    """
-    Aligns two lists of content items using a hybrid scoring model.
 
-    The final score for each potential pair is a weighted average of:
-    1. Semantic Similarity (what it means)
-    2. Type Similarity (how it's structured)
-    3. Positional Proximity (where it is)
-
-    Args:
-        english_content: A list of structured content items from the English document.
-        german_content: A list of structured content items from the German document.
-
-    Returns:
-        A list of dictionaries, each representing an aligned pair, an omission, or an addition.
-    """
     if not english_content or not german_content:
         return []
 

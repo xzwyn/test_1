@@ -7,7 +7,7 @@ EvaluationFinding = Dict[str, Any]
 
 def save_alignment_report(aligned_data: List[AlignedPair], filepath: Path) -> None:
     if not aligned_data:
-        print("Warning: No aligned data to save to Excel.")
+        print("No aligned data to save to Excel.")
         return
 
     report_data = []

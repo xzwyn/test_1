@@ -2,7 +2,6 @@ import json
 from src.clients.azure_client import chat  
 
 def evaluate_translation_pair(eng_text: str, ger_text: str, model_name=None):
-    """Agent 1: Primary Translation Auditor."""
     prompt = f"""
 ## ROLE
 You are the Primary Translation Auditor for EN→DE corporate reports.
@@ -33,7 +32,6 @@ Return the JSON object only—no extra text, no markdown.
         return {"error_type": "System Error", "explanation": str(exc)}
 
 def check_context_mismatch(eng_text: str, ger_text: str, model_name: str = None):
-    """Agent 3: Narrative-Integrity Analyst."""
     prompt = f"""
 ROLE: Narrative-Integrity Analyst
 ...

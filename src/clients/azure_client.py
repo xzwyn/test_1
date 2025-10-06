@@ -15,7 +15,6 @@ _cfg = {
 }
 
 def _load_env():
-    """Loads Azure configuration from environment variables."""
     _cfg["endpoint"] = os.getenv("AZURE_OPENAI_ENDPOINT")
     _cfg["api_key"] = os.getenv("AZURE_OPENAI_API_KEY")
     _cfg["api_version"] = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-01")

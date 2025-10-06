@@ -15,7 +15,6 @@ def _agent2_validate_finding(
     explanation: str,
     model_name: str | None = None,
 ):
-    """Second-stage reviewer. Confirms only truly fatal errors."""
     prompt = f"""
 ## ROLE
 **Senior Quality Reviewer** – you are the final gatekeeper of EN→DE

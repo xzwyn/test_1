@@ -1,31 +1,25 @@
-# document_aligner/config.py
+import os
+from dotenv import load_dotenv
 
-# --- Model Configuration ---
-# The name of the multilingual sentence transformer model to use for semantic similarity.
-MODEL_NAME: str = 'distiluse-base-multilingual-cased-v2'
+load_dotenv()
 
-# --- Alignment Configuration ---
-# The minimum BLENDED score required to consider two segments a match.
-SIMILARITY_THRESHOLD: float = 0.70
+AZURE_EMBEDDING_ENDPOINT = os.getenv("AZURE_EMBEDDING_ENDPOINT")
+AZURE_EMBEDDING_API_KEY = os.getenv("AZURE_EMBEDDING_API_KEY")
+AZURE_EMBEDDING_DEPLOYMENT_NAME = os.getenv("AZURE_EMBEDDING_DEPLOYMENT_NAME")
+AZURE_API_VERSION = os.getenv("AZURE_API_VERSION", "2024-02-01")
 
-# --- HYBRID SCORE WEIGHTS (Total should ideally sum to 1.0) ---
-W_SEMANTIC: float = 0.6  # Weight of the semantic similarity score
-W_TYPE: float = 0.3      # Weight of the structural type match score
-W_PROXIMITY: float = 0.1   # Weight of the sequential proximity score
+IGNORED_ROLES = {'pageHeader', 'pageFooter', 'pageNumber'}
+STRUCTURAL_ROLES = {'title', 'sectionHeading'}
 
-# --- TYPE SCORE CONFIGURATION ---
-TYPE_MATCH_BONUS: float = 1.0   # Score given when types match (e.g., heading -> heading)
-TYPE_MISMATCH_PENALTY: float = -1.0 # Score given when types mismatch (e.g., heading -> paragraph)
+W_SEMANTIC = 0.80  # Weight for semantic similarity (cosine score)
+W_TYPE = 0.10      # Weight for matching content types (e.g., table vs. table)
+W_PROXIMITY = 0.10 # Weight for relative position in the document
 
-# --- Evaluation Configuration ---
-# Default Azure OpenAI chat deployment name. This is overridden by the
-# AZURE_OPENAI_DEPLOYMENT environment variable if it is set.
-AZURE_CHAT_DEPLOYMENT: str = "gpt-4o"
+TYPE_MATCH_BONUS = 0.1
+TYPE_MISMATCH_PENALTY = -0.2
 
-# --- JSON Processing Configuration ---
-IGNORED_ROLES = {"pageHeader", "pageFooter", "pageNumber"}
-STRUCTURAL_ROLES = {'title', 'sectionHeading', 'subheading'}
+# The minimum blended score for a pair to be considered a match
+SIMILARITY_THRESHOLD = 0.7
 
-# --- Directory Configuration ---
 INPUT_DIR: str = "input"
 OUTPUT_DIR: str = "output"

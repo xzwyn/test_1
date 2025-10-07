@@ -1,15 +1,15 @@
-import os
 import argparse
 import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 load_dotenv()
+
 import config
 from src.processing.json_parser import process_document_json
 from src.alignment.semantic_aligner import align_content
 from src.reporting.markdown_writer import save_to_markdown
-from src.reporting.excel_writer import save_alignment_report, save_evaluation_report
+from src.reporting.excel_writer import save_alignment_report, save_evaluation_report, save_calculation_report
 from src.evaluation.pipeline import run_evaluation_pipeline
 
 def main():
@@ -26,8 +26,13 @@ def main():
         "--evaluate", action="store_true",
         help="Run the AI evaluation pipeline after alignment."
     )
+    parser.add_argument(
+        "--debug-report", action="store_true",
+        help="Generate a detailed Excel report showing the score calculations for debugging."
+    )
     args = parser.parse_args()
 
+    # --- 1. Setup Paths ---
     eng_path = Path(args.english_json)
     ger_path = Path(args.german_json)
     
@@ -42,6 +47,13 @@ def main():
         
     output_md_eng_path = output_dir / f"{eng_path.stem}_processed.md"
     output_md_ger_path = output_dir / f"{ger_path.stem}_processed.md"
+
+    # Path for the debug report
+    if args.debug_report:
+        output_debug_path = output_dir / f"debug_calculations_{eng_path.stem}_{timestamp}.xlsx"
+        print(f"Debug Report will be saved to: {output_debug_path}\n")
+    else:
+        output_debug_path = None
 
     print("--- Document Alignment Pipeline Started ---")
     print(f"English Source: {eng_path}")
@@ -66,7 +78,12 @@ def main():
     print(f"-> Markdown files saved in '{output_dir.resolve()}'\n")
 
     print("Step 3/5: Performing semantic alignment...")
-    aligned_pairs = align_content(english_content, german_content)
+    aligned_pairs = align_content(
+        english_content,
+        german_content,
+        generate_debug_report=args.debug_report,
+        debug_report_path=output_debug_path
+    )
     print(f"-> Alignment complete. Found {len(aligned_pairs)} aligned pairs.\n")
     
     print("Step 4/5: Writing alignment report to Excel...")

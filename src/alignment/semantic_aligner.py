@@ -1,22 +1,55 @@
 from typing import List, Dict, Any
-from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+from pathlib import Path
 import numpy as np
+from sklearn.metrics.pairwise import cosine_similarity
+from openai import AzureOpenAI
 from tqdm import tqdm
 
 import config
+from src.reporting.excel_writer import save_calculation_report
 
+# Type Aliases for clarity
 ContentItem = Dict[str, Any]
 AlignedPair = Dict[str, Any]
 
-_model = None
+# A reusable client instance
+_client = None
 
-def _get_model(model_name: str) -> SentenceTransformer:
-    global _model
-    if _model is None:
-        print(f"Loading sentence transformer model '{model_name}'...")
-        _model = SentenceTransformer(model_name)
-    return _model
+def _get_azure_client() -> AzureOpenAI:
+    """Initializes and returns a reusable AzureOpenAI client."""
+    global _client
+    if _client is None:
+        print("Initializing Azure OpenAI client...")
+        if not all([config.AZURE_EMBEDDING_ENDPOINT, config.AZURE_EMBEDDING_API_KEY]):
+            raise ValueError("Azure credentials (endpoint, key) are not set in the config/.env file.")
+        
+        _client = AzureOpenAI(
+            api_version=config.AZURE_API_VERSION,
+            azure_endpoint=config.AZURE_EMBEDDING_ENDPOINT,
+            api_key=config.AZURE_EMBEDDING_API_KEY,
+        )
+    return _client
+
+def _get_embeddings_in_batches(texts: List[str], client: AzureOpenAI, batch_size: int = 16) -> np.ndarray:
+    """
+    Generates embeddings by sending texts to the Azure API in batches.
+    """
+    all_embeddings = []
+    for i in tqdm(range(0, len(texts), batch_size), desc="Generating Embeddings"):
+        batch = texts[i:i + batch_size]
+        try:
+            response = client.embeddings.create(
+                input=batch,
+                model=config.AZURE_EMBEDDING_DEPLOYMENT_NAME
+            )
+            batch_embeddings = [item.embedding for item in response.data]
+            all_embeddings.extend(batch_embeddings)
+        except Exception as e:
+            print(f"An error occurred while processing a batch: {e}")
+            # Add placeholder embeddings for the failed batch to avoid size mismatch
+            all_embeddings.extend([[0.0] * 3072] * len(batch)) # text-embedding-3-large has 3072 dimensions
+
+    return np.array(all_embeddings)
 
 def _calculate_type_matrix(eng_content: List[ContentItem], ger_content: List[ContentItem]) -> np.ndarray:
     num_eng = len(eng_content)
@@ -35,44 +68,53 @@ def _calculate_proximity_matrix(num_eng: int, num_ger: int) -> np.ndarray:
     proximity_matrix = np.zeros((num_eng, num_ger))
     for i in range(num_eng):
         for j in range(num_ger):
-            norm_pos_eng = i / num_eng
-            norm_pos_ger = j / num_ger
+            norm_pos_eng = i / num_eng if num_eng > 0 else 0
+            norm_pos_ger = j / num_ger if num_ger > 0 else 0
             proximity_matrix[i, j] = 1.0 - abs(norm_pos_eng - norm_pos_ger)
     return proximity_matrix
 
 def align_content(
     english_content: List[ContentItem],
-    german_content: List[ContentItem]
+    german_content: List[ContentItem],
+    generate_debug_report: bool = False,
+    debug_report_path: Path = None
 ) -> List[AlignedPair]:
-
     if not english_content or not german_content:
         return []
 
-    model = _get_model(config.MODEL_NAME)
+    client = _get_azure_client()
     num_eng, num_ger = len(english_content), len(german_content)
 
-    # --- 1. Generate Embeddings for Semantic Score ---
     eng_texts = [item['text'] for item in english_content]
     ger_texts = [item['text'] for item in german_content]
     
-    print("Generating embeddings...")
-    english_embeddings = model.encode(eng_texts, convert_to_numpy=True, show_progress_bar=True)
-    german_embeddings = model.encode(ger_texts, convert_to_numpy=True, show_progress_bar=True)
+    # Generate embeddings using the new Azure API function
+    english_embeddings = _get_embeddings_in_batches(eng_texts, client)
+    german_embeddings = _get_embeddings_in_batches(ger_texts, client)
     
-    # --- 2. Calculate Individual Score Matrices ---
     print("Calculating score matrices (semantic, type, proximity)...")
     semantic_matrix = cosine_similarity(english_embeddings, german_embeddings)
     type_matrix = _calculate_type_matrix(english_content, german_content)
     proximity_matrix = _calculate_proximity_matrix(num_eng, num_ger)
 
-    # --- 3. Calculate Blended Score Matrix ---
     blended_matrix = (
         (config.W_SEMANTIC * semantic_matrix) +
         (config.W_TYPE * type_matrix) +
         (config.W_PROXIMITY * proximity_matrix)
     )
 
-    # --- 4. Find Best Matches using the Blended Score ---
+    if generate_debug_report and debug_report_path:
+        print("Generating detailed calculation report for debugging...")
+        save_calculation_report(
+            english_content=english_content,
+            german_content=german_content,
+            blended_matrix=blended_matrix,
+            semantic_matrix=semantic_matrix,
+            type_matrix=type_matrix,
+            proximity_matrix=proximity_matrix,
+            filepath=debug_report_path
+        )
+
     print("Finding best matches based on blended scores...")
     aligned_pairs: List[AlignedPair] = []
     used_german_indices = set()
@@ -85,26 +127,23 @@ def align_content(
         score = blended_matrix[eng_idx, ger_idx]
 
         if is_mutual_best_match and score >= config.SIMILARITY_THRESHOLD:
-            # We use the raw semantic score for reporting, as it's more interpretable
             semantic_score = semantic_matrix[eng_idx, ger_idx]
             aligned_pairs.append({
                 "english": english_content[eng_idx],
                 "german": german_content[ger_idx],
-                "similarity": semantic_score  # Report the original semantic score
+                "similarity": float(semantic_score) # Cast to float for JSON serialization
             })
             used_german_indices.add(ger_idx)
 
-    # --- 5. Identify Omissions and Additions ---
-    matched_english_indices = {id(pair['english']) for pair in aligned_pairs if pair.get('english')}
+    matched_english_ids = {id(pair['english']) for pair in aligned_pairs if pair.get('english')}
     for item in english_content:
-        if id(item) not in matched_english_indices:
+        if id(item) not in matched_english_ids:
             aligned_pairs.append({"english": item, "german": None, "similarity": 0.0})
 
     for idx, item in enumerate(german_content):
         if idx not in used_german_indices:
              aligned_pairs.append({"english": None, "german": item, "similarity": 0.0})
 
-    # Sort the final list for logical order
     aligned_pairs.sort(key=lambda x: x['english']['page'] if x.get('english') else float('inf'))
     
     return aligned_pairs

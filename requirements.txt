@@ -1,11 +1,12 @@
-pandas
-openpyxl
+openai
+azure-core
+python-dotenv
 
-sentence-transformers
-torch
+# Libraries for data handling and calculations
+numpy
 scikit-learn
-
 tqdm
 
-openai>=1.40.0
-python-dotenv
+# Libraries for dataframes and writing Excel files
+pandas
+openpyxl

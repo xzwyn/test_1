@@ -1,8 +1,7 @@
-# document_aligner/src/processing/json_parser.py
-
 import json
 from pathlib import Path
 from typing import List, Dict, Any
+import re # <--- NEW IMPORT
 
 import config
 
@@ -11,6 +10,7 @@ ContentItem = Dict[str, Any]
 
 def _convert_table_to_markdown(table_obj: Dict) -> str:
     """Converts an Azure table object into a Markdown string."""
+    # ... (function body remains unchanged) ...
     markdown_str = ""
     if not table_obj.get('cells'):
         return ""
@@ -48,6 +48,70 @@ def _convert_table_to_markdown(table_obj: Dict) -> str:
     return markdown_str.strip()
 
 
+def extract_canonical_toc_headings(full_text: str) -> List[str]:
+    """
+    Extracts the definite, canonical section headings found in the TOC.
+    This directly implements the user's PyMuPDF/regex logic to get the list of keys.
+    """
+    # Regex patterns provided by the user, modified slightly for robustness:
+    # 1. Main sections (A, B, C, D) e.g., 'A _ To Our Investors' (Must capture only up to the first space after the prefix)
+    main_title_pattern = re.compile(r"^[A-D] _? (.*)")
+    # 2. Numbered sections (e.g., '2 Supervisory Board Report') - Captures the heading text only
+    sub_section_pattern = re.compile(r"^\d+ (.*)")
+    # 3. All-caps headings (e.g., 'FINANCIAL STATEMENTS') - Captures all caps words followed by non-newline characters
+    heading_pattern = re.compile(r"^[A-Z\s]+$")
+
+    canonical_headings = []
+    
+    # Analyze only the first 5000 characters to capture the TOC, avoiding large text analysis
+    toc_text_block = full_text[:5000]
+
+    for line in toc_text_block.split('\n'):
+        line = line.strip()
+        if not line or len(line) < 5: # Ignore very short lines/noise
+            continue
+
+        match = None
+        # Check for A/B/C/D sections
+        if re.match(r"^[A-D] _", line):
+            # Clean the line by stripping everything after the section name (e.g., page numbers, page ranges)
+            # Find the index of the first digit (page number) to cut the string
+            first_digit_index = next((i for i, char in enumerate(line) if char.isdigit()), len(line))
+            
+            # Keep only the structural prefix and the section name
+            cleaned_line = line[:first_digit_index].strip()
+            
+            # Strip trailing garbage/page markers that might not be digits
+            cleaned_line = cleaned_line.replace('Pages', '').replace('Seiten', '').strip()
+            
+            # Only accept lines that look like a clean major A/B/C/D heading
+            if re.match(r"^[A-D] _ [A-Za-z\s]+$", cleaned_line):
+                 match = cleaned_line
+                 
+        # Check for Numbered Sub-Sections (e.g., 2, 8, 11)
+        elif re.match(r"^\d+\s", line):
+            # Use the regex to clean out numbers and trailing page numbers/ranges (e.g., "49 Nature of Operations...Pages 49")
+            # We assume the heading ends before the page number or the word "Pages/Seiten"
+            # In the user's list: "2 Supervisory Board Report", "8 Mandates..."
+            parts = line.split()
+            if len(parts) > 1 and parts[0].isdigit():
+                heading_text = " ".join(parts[1:])
+                # Stop at the first occurrence of "Pages" or a page number indicator
+                final_heading = heading_text.split('Pages')[0].split('Seiten')[0].strip()
+                # Also strip any trailing digits that might be page numbers without the word 'Pages'
+                final_heading = re.sub(r'\s*\d+([\s\-\d]+)?$', '', final_heading).strip()
+                match = final_heading
+                
+        # Check for All-Caps Headings (e.g., FINANCIAL STATEMENTS)
+        elif heading_pattern.match(line) and len(line) > 5 and ' ' in line:
+            match = line
+            
+        if match and match not in canonical_headings:
+            canonical_headings.append(match)
+            
+    return canonical_headings
+
+
 def process_document_json(filepath: Path) -> List[ContentItem]:
     """
     Reads and processes an Azure Document Intelligence JSON file,
@@ -69,6 +133,7 @@ def process_document_json(filepath: Path) -> List[ContentItem]:
         raise ValueError(f"JSON file '{filepath}' is missing expected key: {e}") from e
     
     # --- Step 1: Identify all character offsets belonging to tables to avoid duplication ---
+    # ... (rest of Step 1 remains unchanged)
     table_offsets = set()
     for table in raw_tables:
         for span in table.get('spans', []):

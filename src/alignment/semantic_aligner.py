@@ -1,102 +1,41 @@
-from typing import List, Dict, Any
-from pathlib import Path
+# src/alignment/semantic_aligner.py
+
+from typing import List, Dict, Any, Tuple, Optional
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
-from openai import AzureOpenAI
-from tqdm import tqdm
-from scipy.optimize import linear_sum_assignment  # New import for Hungarian algorithm
+from scipy.optimize import linear_sum_assignment
 
 import config
-from src.reporting.excel_writer import save_calculation_report
+from src.clients.azure_client import get_embeddings # Correctly import from Azure client
 
-# Type Aliases for clarity
+# Type Aliases
 ContentItem = Dict[str, Any]
 AlignedPair = Dict[str, Any]
 
-# A reusable client instance
-_client = None
-
-def _get_azure_client() -> AzureOpenAI:
-    """Initializes and returns a reusable AzureOpenAI client."""
-    global _client
-    if _client is None:
-        print("Initializing Azure OpenAI client...")
-        if not all([config.AZURE_EMBEDDING_ENDPOINT, config.AZURE_EMBEDDING_API_KEY]):
-            raise ValueError("Azure credentials (endpoint, key) are not set in the config/.env file.")
-
-        _client = AzureOpenAI(
-            api_version=config.AZURE_API_VERSION,
-            azure_endpoint=config.AZURE_EMBEDDING_ENDPOINT,
-            api_key=config.AZURE_EMBEDDING_API_KEY,
-        )
-    return _client
-
-def _get_embeddings_in_batches(
-    texts: List[str], 
-    content_items: List[ContentItem],  # New parameter
-    client: AzureOpenAI, 
-    batch_size: int = 16,
-    context_window: int = 0  # New parameter
+def _get_embeddings_with_context(
+    texts: List[str],
+    content_items: List[ContentItem]
 ) -> np.ndarray:
     """
-    Generates embeddings by sending texts to the Azure API in batches.
-    Optionally includes context from surrounding segments.
+    Prepares text with context and gets embeddings from the Azure OpenAI API.
     """
-    # Generate texts with context if context_window > 0
-    if context_window > 0:
-        texts_with_context = []
-        for i, text in enumerate(texts):
-            # Get preceding context
-            pre_context = ""
-            for j in range(max(0, i - context_window), i):
-                pre_context += f"{content_items[j]['text']} "
-
-            # Get following context
-            post_context = ""
-            for j in range(i + 1, min(len(texts), i + context_window + 1)):
-                post_context += f" {content_items[j]['text']}"
-
-            # Include content type and page number for additional context
-            content_type = content_items[i]['type']
-            page_num = content_items[i]['page']
-
-            # Create context-enhanced text
-            if pre_context or post_context:
-                context_text = f"{pre_context}[SEP]{text}[SEP]{post_context} [TYPE:{content_type}] [PAGE:{page_num}]"
-            else:
-                context_text = f"{text} [TYPE:{content_type}] [PAGE:{page_num}]"
-
-            texts_with_context.append(context_text)
-
-        # Use the context-enhanced texts
-        texts_to_embed = texts_with_context
-    else:
-        # Use original texts
-        texts_to_embed = texts
-
-    # Generate embeddings in batches
-    all_embeddings = []
-    for i in tqdm(range(0, len(texts_to_embed), batch_size), desc="Generating Embeddings"):
-        batch = texts_to_embed[i:i + batch_size]
-        try:
-            response = client.embeddings.create(
-                input=batch,
-                model=config.AZURE_EMBEDDING_DEPLOYMENT_NAME
-            )
-            batch_embeddings = [item.embedding for item in response.data]
-            all_embeddings.extend(batch_embeddings)
-        except Exception as e:
-            print(f"An error occurred while processing a batch: {e}")
-            # Add placeholder embeddings for the failed batch to avoid size mismatch
-            all_embeddings.extend([[0.0] * 3072] * len(batch))  # text-embedding-3-large has 3072 dimensions
-
-    return np.array(all_embeddings)
+    context_window = 1
+    texts_with_context = []
+    print(f"Enhancing text with a context window of {context_window}...")
+    for i, text in enumerate(texts):
+        pre_context = " ".join([content_items[j]['text'] for j in range(max(0, i - context_window), i)])
+        post_context = " ".join([content_items[j]['text'] for j in range(i + 1, min(len(texts), i + 1 + context_window))])
+        context_text = f"{pre_context} [SEP] {text} [SEP] {post_context}".strip()
+        texts_with_context.append(context_text)
+    
+    # Get embeddings from Azure and convert to numpy array
+    embedding_list = get_embeddings(texts_with_context)
+    return np.array(embedding_list)
 
 def _calculate_type_matrix(eng_content: List[ContentItem], ger_content: List[ContentItem]) -> np.ndarray:
-    num_eng = len(eng_content)
-    num_ger = len(ger_content)
+    """Calculates a matrix rewarding or penalizing based on content type matching."""
+    num_eng, num_ger = len(eng_content), len(ger_content)
     type_matrix = np.zeros((num_eng, num_ger))
-
     for i in range(num_eng):
         for j in range(num_ger):
             if eng_content[i]['type'] == ger_content[j]['type']:
@@ -106,137 +45,86 @@ def _calculate_type_matrix(eng_content: List[ContentItem], ger_content: List[Con
     return type_matrix
 
 def _calculate_proximity_matrix(num_eng: int, num_ger: int) -> np.ndarray:
+    """Calculates a matrix rewarding based on the relative position in the document."""
     proximity_matrix = np.zeros((num_eng, num_ger))
     for i in range(num_eng):
         for j in range(num_ger):
-            norm_pos_eng = i / num_eng if num_eng > 0 else 0
-            norm_pos_ger = j / num_ger if num_ger > 0 else 0
+            norm_pos_eng = i / num_eng if num_eng > 1 else 0
+            norm_pos_ger = j / num_ger if num_ger > 1 else 0
             proximity_matrix[i, j] = 1.0 - abs(norm_pos_eng - norm_pos_ger)
     return proximity_matrix
 
 def align_content(
     english_content: List[ContentItem],
     german_content: List[ContentItem],
-    algorithm: str = "mutual",  # New parameter
-    context_window: int = 0,    # New parameter
-    generate_debug_report: bool = False,
-    debug_report_path: Path = None
-) -> List[AlignedPair]:
+    generate_debug_report: bool = False
+) -> Tuple[List[AlignedPair], Optional[Dict[str, Any]]]:
     """
-    Aligns content between English and German documents.
-
-    Args:
-        english_content: List of English content items
-        german_content: List of German content items
-        algorithm: Matching algorithm to use ("mutual" or "hungarian")
-        context_window: Size of context window (0 for no context)
-        generate_debug_report: Whether to generate a detailed calculation report
-        debug_report_path: Path to save the debug report
+    Aligns content using the Hungarian algorithm with Azure OpenAI embeddings.
 
     Returns:
-        List of aligned pairs
+        A tuple containing:
+        1. A list of aligned pairs.
+        2. A dictionary with all data needed for a debug report (or None if not requested).
     """
     if not english_content or not german_content:
-        return []
+        return [], None
 
-    client = _get_azure_client()
-    num_eng, num_ger = len(english_content), len(german_content)
-
-    eng_texts = [item['text'] for item in english_content]
-    ger_texts = [item['text'] for item in german_content]
-
-    # Generate embeddings using the updated function with context support
-    english_embeddings = _get_embeddings_in_batches(
-        eng_texts, 
-        english_content,  # Pass content items for context
-        client,
-        context_window=context_window
+    # Get embeddings for both languages
+    english_embeddings = _get_embeddings_with_context(
+        [item['text'] for item in english_content], english_content
     )
-    german_embeddings = _get_embeddings_in_batches(
-        ger_texts, 
-        german_content,  # Pass content items for context
-        client,
-        context_window=context_window
+    german_embeddings = _get_embeddings_with_context(
+        [item['text'] for item in german_content], german_content
     )
 
-    print("Calculating score matrices (semantic, type, proximity)...")
+    # Calculate the three score matrices
     semantic_matrix = cosine_similarity(english_embeddings, german_embeddings)
     type_matrix = _calculate_type_matrix(english_content, german_content)
-    proximity_matrix = _calculate_proximity_matrix(num_eng, num_ger)
+    proximity_matrix = _calculate_proximity_matrix(len(english_content), len(german_content))
 
+    # Blend the matrices using weights from config
     blended_matrix = (
         (config.W_SEMANTIC * semantic_matrix) +
         (config.W_TYPE * type_matrix) +
         (config.W_PROXIMITY * proximity_matrix)
     )
 
-    if generate_debug_report and debug_report_path:
-        print("Generating detailed calculation report for debugging...")
-        save_calculation_report(
-            english_content=english_content,
-            german_content=german_content,
-            blended_matrix=blended_matrix,
-            semantic_matrix=semantic_matrix,
-            type_matrix=type_matrix,
-            proximity_matrix=proximity_matrix,
-            filepath=debug_report_path
-        )
+    debug_data = None
+    if generate_debug_report:
+        debug_data = {
+            'english_content': english_content,
+            'german_content': german_content,
+            'blended_matrix': blended_matrix,
+            'semantic_matrix': semantic_matrix,
+            'type_matrix': type_matrix,
+            'proximity_matrix': proximity_matrix
+        }
 
+    # Find optimal pairs using the Hungarian algorithm
     aligned_pairs: List[AlignedPair] = []
-    used_german_indices = set()
+    used_english_indices, used_german_indices = set(), set()
+    cost_matrix = -blended_matrix
+    row_indices, col_indices = linear_sum_assignment(cost_matrix)
 
-    # Choose matching algorithm based on parameter
-    if algorithm == "hungarian":
-        print("Finding optimal global alignment using Hungarian algorithm...")
-        # Hungarian algorithm minimizes cost, so we negate the similarity scores
-        cost_matrix = -blended_matrix.copy()
+    for eng_idx, ger_idx in zip(row_indices, col_indices):
+        score = blended_matrix[eng_idx, ger_idx]
+        if score >= config.SIMILARITY_THRESHOLD:
+            semantic_score = semantic_matrix[eng_idx, ger_idx]
+            aligned_pairs.append({
+                "english": english_content[eng_idx],
+                "german": german_content[ger_idx],
+                "similarity": float(semantic_score)
+            })
+            used_english_indices.add(eng_idx)
+            used_german_indices.add(ger_idx)
 
-        # Find optimal assignment
-        row_indices, col_indices = linear_sum_assignment(cost_matrix)
-
-        # Process the matches found by the Hungarian algorithm
-        for eng_idx, ger_idx in zip(row_indices, col_indices):
-            score = blended_matrix[eng_idx, ger_idx]
-
-            # Only include matches that meet the threshold
-            if score >= config.SIMILARITY_THRESHOLD:
-                semantic_score = semantic_matrix[eng_idx, ger_idx]
-                aligned_pairs.append({
-                    "english": english_content[eng_idx],
-                    "german": german_content[ger_idx],
-                    "similarity": float(semantic_score)  # Cast to float for JSON serialization
-                })
-                used_german_indices.add(ger_idx)
-    else:
-        print("Finding best matches based on mutual best match algorithm...")
-        best_ger_matches = np.argmax(blended_matrix, axis=1)
-        best_eng_matches = np.argmax(blended_matrix, axis=0)
-
-        for eng_idx, ger_idx in enumerate(best_ger_matches):
-            is_mutual_best_match = (best_eng_matches[ger_idx] == eng_idx)
-            score = blended_matrix[eng_idx, ger_idx]
-
-            if is_mutual_best_match and score >= config.SIMILARITY_THRESHOLD:
-                semantic_score = semantic_matrix[eng_idx, ger_idx]
-                aligned_pairs.append({
-                    "english": english_content[eng_idx],
-                    "german": german_content[ger_idx],
-                    "similarity": float(semantic_score)  # Cast to float for JSON serialization
-                })
-                used_german_indices.add(ger_idx)
-
-    # Add unmatched English content
-    matched_english_ids = {id(pair['english']) for pair in aligned_pairs if pair.get('english')}
-    for item in english_content:
-        if id(item) not in matched_english_ids:
+    # Add any remaining unmatched items
+    for i, item in enumerate(english_content):
+        if i not in used_english_indices:
             aligned_pairs.append({"english": item, "german": None, "similarity": 0.0})
-
-    # Add unmatched German content
-    for idx, item in enumerate(german_content):
-        if idx not in used_german_indices:
-             aligned_pairs.append({"english": None, "german": item, "similarity": 0.0})
-
-    # Sort by English page number
-    aligned_pairs.sort(key=lambda x: x['english']['page'] if x.get('english') else float('inf'))
-
-    return aligned_pairs
+    for j, item in enumerate(german_content):
+        if j not in used_german_indices:
+            aligned_pairs.append({"english": None, "german": item, "similarity": 0.0})
+    
+    return aligned_pairs, debug_data

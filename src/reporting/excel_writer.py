@@ -1,22 +1,25 @@
-# document_aligner/src/reporting/excel_writer.py
+# src/reporting/excel_writer.py
 
 from pathlib import Path
 from typing import List, Dict, Any
 import pandas as pd
 import numpy as np
+import re
 
 import config
 
-# (Type aliases and the first two functions, save_alignment_report and save_evaluation_report, are unchanged)
+# Type aliases
 AlignedPair = Dict[str, Any]
 EvaluationFinding = Dict[str, Any]
 ContentItem = Dict[str, Any]
 
+# save_alignment_report and save_evaluation_report remain unchanged
 def save_alignment_report(aligned_data: List[AlignedPair], filepath: Path) -> None:
     """Saves the document alignment data to an Excel file."""
     if not aligned_data:
         print("Warning: No aligned data to save to Excel.")
         return
+    # ... (rest of the function is unchanged)
     report_data = []
     for pair in aligned_data:
         eng_item = pair.get('english')
@@ -40,6 +43,7 @@ def save_evaluation_report(evaluation_results: List[EvaluationFinding], filepath
     if not evaluation_results:
         print("No evaluation findings to save.")
         return
+    # ... (rest of the function is unchanged)
     evaluation_results.sort(key=lambda x: x.get('page', 0))
     df = pd.DataFrame(evaluation_results)
     desired_columns = [
@@ -53,98 +57,77 @@ def save_evaluation_report(evaluation_results: List[EvaluationFinding], filepath
     except Exception as e:
         print(f"Error: Could not write evaluation report to '{filepath}'. Reason: {e}")
 
-def save_calculation_report(
-    english_content: List[ContentItem],
-    german_content: List[ContentItem],
-    blended_matrix: np.ndarray,
-    semantic_matrix: np.ndarray,
-    type_matrix: np.ndarray,
-    proximity_matrix: np.ndarray,
+
+def _create_debug_dataframe(debug_data: Dict[str, Any]) -> pd.DataFrame:
+    """Helper function to create a debug dataframe from raw calculation data."""
+    report_data = []
+    
+    # Unpack the data for clarity
+    english_content = debug_data['english_content']
+    german_content = debug_data['german_content']
+    blended_matrix = debug_data['blended_matrix']
+    semantic_matrix = debug_data['semantic_matrix']
+    type_matrix = debug_data['type_matrix']
+    proximity_matrix = debug_data['proximity_matrix']
+
+    if not german_content:
+        return pd.DataFrame([{"Message": "No German content to compare against in this section."}])
+
+    best_ger_indices = np.argmax(blended_matrix, axis=1)
+
+    for i, item in enumerate(english_content):
+        best_match_idx = best_ger_indices[i]
+        best_german_match = german_content[best_match_idx]
+        
+        raw_semantic = semantic_matrix[i, best_match_idx]
+        raw_type = type_matrix[i, best_match_idx]
+        raw_proximity = proximity_matrix[i, best_match_idx]
+        
+        report_data.append({
+            "English Text": item['text'],
+            "English Type": item['type'],
+            "English Page": item['page'],
+            "Weighted Semantic": f"{raw_semantic * config.W_SEMANTIC:.4f}",
+            "Weighted Type": f"{raw_type * config.W_TYPE:.4f}",
+            "Weighted Proximity": f"{raw_proximity * config.W_PROXIMITY:.4f}",
+            "Total Score": f"{blended_matrix[i, best_match_idx]:.4f}",
+            "Best Match (German)": best_german_match['text'],
+            "Best Match Type": best_german_match['type'],
+            "Best Match Page No": best_german_match['page']
+        })
+        
+    return pd.DataFrame(report_data)
+
+def save_consolidated_debug_report(
+    all_debug_data: List[Dict[str, Any]], 
     filepath: Path
 ):
     """
-    Saves a highly detailed, two-sheet Excel report showing all alignment score calculations.
+    Saves a single, consolidated debug report with a summary sheet and individual
+    sheets for each section's calculations.
     """
+    if not all_debug_data:
+        print("No debug data was generated to save.")
+        return
+
     try:
         with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-            # --- Process English Sheet ---
-            eng_report_data = []
-            best_ger_indices = np.argmax(blended_matrix, axis=1)
-
-            for i, item in enumerate(english_content):
-                best_match_idx = best_ger_indices[i]
-                best_match_item = german_content[best_match_idx]
-
-                raw_semantic = semantic_matrix[i, best_match_idx]
-                raw_type = type_matrix[i, best_match_idx]
-                raw_proximity = proximity_matrix[i, best_match_idx]
-
-                eng_report_data.append({
-                    "Text": item['text'],
-                    "Type": item['type'],
-                    "Page No": item['page'],
-
-                    # --- Detailed Semantic Columns ---
-                    "Raw Semantic": f"{raw_semantic:.4f}",
-                    "Semantic Calculation": f"{raw_semantic:.4f} x {config.W_SEMANTIC}",
-                    "Weighted Semantic": f"{raw_semantic * config.W_SEMANTIC:.4f}",
-
-                    # --- Detailed Type Columns ---
-                    "Raw Type": f"{raw_type:.1f}",
-                    "Type Calculation": f"{raw_type:.1f} x {config.W_TYPE}",
-                    "Weighted Type": f"{raw_type * config.W_TYPE:.4f}",
-
-                    # --- Detailed Proximity Columns ---
-                    "Raw Proximity": f"{raw_proximity:.4f}",
-                    "Proximity Calculation": f"{raw_proximity:.4f} x {config.W_PROXIMITY}",
-                    "Weighted Proximity": f"{raw_proximity * config.W_PROXIMITY:.4f}",
-
-                    "Total Score": f"{blended_matrix[i, best_match_idx]:.4f}",
-                    "Best Match (German)": best_match_item['text'],
-                    "Best Match Type": best_match_item['type'],  # New column
-                    "Best Match Page": best_match_item['page']   # New column
-                })
-
-            df_eng = pd.DataFrame(eng_report_data)
-            df_eng.to_excel(writer, sheet_name='English Calculations', index=False)
-
-            # --- Process German Sheet ---
-            ger_report_data = []
-            best_eng_indices = np.argmax(blended_matrix, axis=0)
-
-            for j, item in enumerate(german_content):
-                best_match_idx = best_eng_indices[j]
-                best_match_item = english_content[best_match_idx]
-
-                raw_semantic = semantic_matrix[best_match_idx, j]
-                raw_type = type_matrix[best_match_idx, j]
-                raw_proximity = proximity_matrix[best_match_idx, j]
-
-                ger_report_data.append({
-                    "Text": item['text'],
-                    "Type": item['type'],
-                    "Page No": item['page'],
-
-                    "Raw Semantic": f"{raw_semantic:.4f}",
-                    "Semantic Calculation": f"{raw_semantic:.4f} x {config.W_SEMANTIC}",
-                    "Weighted Semantic": f"{raw_semantic * config.W_SEMANTIC:.4f}",
-
-                    "Raw Type": f"{raw_type:.1f}",
-                    "Type Calculation": f"{raw_type:.1f} x {config.W_TYPE}",
-                    "Weighted Type": f"{raw_type * config.W_TYPE:.4f}",
-
-                    "Raw Proximity": f"{raw_proximity:.4f}",
-                    "Proximity Calculation": f"{raw_proximity:.4f} x {config.W_PROXIMITY}",
-                    "Weighted Proximity": f"{raw_proximity * config.W_PROXIMITY:.4f}",
-
-                    "Total Score": f"{blended_matrix[best_match_idx, j]:.4f}",
-                    "Best Match (English)": best_match_item['text'],
-                    "Best Match Type": best_match_item['type'],  # New column
-                    "Best Match Page": best_match_item['page']   # New column
-                })
-
-            df_ger = pd.DataFrame(ger_report_data)
-            df_ger.to_excel(writer, sheet_name='German Calculations', index=False)
+            all_dfs = []
+            
+            # First, create all the individual section sheets and collect their dataframes
+            for report_info in all_debug_data:
+                df = _create_debug_dataframe(report_info['data'])
+                df.to_excel(writer, sheet_name=report_info['sheet_name'], index=False)
+                all_dfs.append(df)
+            
+            # Now, create the consolidated summary sheet
+            summary_df = pd.concat(all_dfs, ignore_index=True)
+            summary_df.sort_values(by="English Page", inplace=True)
+            
+            # Use 'to_excel' on the writer object to add the summary sheet
+            summary_df.to_excel(writer, sheet_name='Summary', index=False)
 
     except Exception as e:
-        print(f"Error: Could not write debug calculation report to '{filepath}'. Reason: {e}")
+        print(f"Error: Could not write consolidated debug report to '{filepath}'. Reason: {e}")
+
+# The old save_calculation_report function is no longer needed and can be removed.

@@ -1,9 +1,12 @@
+# src/evaluation/pipeline.py
 import json
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from tqdm import tqdm
 
 from src.evaluation.evaluators import evaluate_translation_pair, check_context_mismatch
 from src.clients.azure_client import chat
+
+__all__ = ["run_evaluation_pipeline"]
 
 AlignedPair = Dict[str, Any]
 EvaluationFinding = Dict[str, Any]
@@ -13,14 +16,56 @@ def _agent2_validate_finding(
     ger_text: str,
     error_type: str,
     explanation: str,
-    model_name: str | None = None,
+    model_name: Optional[str] = None,
 ):
+    """
+    Second-stage reviewer.  Confirms only truly fatal errors and rejects
+    false positives.
+    """
     prompt = f"""
 ## ROLE
 **Senior Quality Reviewer** – you are the final gatekeeper of EN→DE
-...
-(The rest of your detailed prompt for Agent 2 is unchanged)
-...
+translation findings.
+
+## TASK
+Decide whether the finding delivered by Agent-1 must be *Confirmed* or
+*Rejected*.
+
+## INSTRUCTIONS
+1. Eligible error_type values are **exactly**:
+   • "Mistranslation"  
+   • "Omission"
+
+2. Confirm only when the evidence is unmistakable:
+   • Mistranslation
+       – number mismatch (digit or word)  
+       – polarity flip / opposite meaning  
+       – actor/role inversion  
+   • Omission
+       – English states an explicit count (“two”, “three”, “both” …) **or**
+         lists concrete items, and at least one item is *truly* missing in
+         German (not conveyed by paraphrase).
+
+3. Reject when:
+   • Difference is stylistic or synonymous.  
+   • Proper names / document titles are rendered with an accepted German
+     equivalent (e.g. “Nichtfinanzielle Erklärung”).  
+   • Alleged omission is actually present via paraphrase.  
+
+## OUTPUT ‑ JSON ONLY
+json {{ "verdict" : "Confirm" | "Reject", "reasoning": "" }}
+
+## MATERIAL TO REVIEW
+English text:
+\"\"\"{eng_text}\"\"\"
+
+German text:
+\"\"\"{ger_text}\"\"\"
+
+Agent-1 proposed:
+  error_type : {error_type}
+  explanation: {explanation}
+
 ## YOUR RESPONSE
 Return the JSON object only – no extra text.
 """
@@ -44,7 +89,7 @@ Return the JSON object only – no extra text.
 
 def run_evaluation_pipeline(aligned_pairs: List[AlignedPair]) -> List[EvaluationFinding]:
     findings = []
-    
+
     for pair in tqdm(aligned_pairs, desc="Evaluating Pairs"):
         eng_elem = pair.get('english')
         ger_elem = pair.get('german')
@@ -58,7 +103,7 @@ def run_evaluation_pipeline(aligned_pairs: List[AlignedPair]) -> List[Evaluation
                 "page": eng_elem['page']
             })
             continue
-        
+
         if not eng_elem and ger_elem:
             findings.append({
                 "type": f"Addition",
